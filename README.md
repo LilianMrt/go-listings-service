@@ -12,7 +12,7 @@ unit and integration tests, Docker, CI, and light self-built observability.
 Work in progress. Milestones:
 
 - [x] M0 Skeleton: module, layout, chi router, `/healthz`, graceful shutdown.
-- [ ] M1 DB + model: Postgres, migrations, pgxpool, repository.
+- [x] M1 DB + model: Postgres, migrations, pgxpool, repository.
 - [ ] M2 REST CRUD: service layer, handlers, validation, pagination/filters.
 - [ ] M3 Tests: unit (fakes) + integration (testcontainers).
 - [ ] M4 Kafka events: publish domain events on mutations.
@@ -23,9 +23,23 @@ Work in progress. Milestones:
 
 ```bash
 cp .env.example .env
-make run          # starts the API on :8080
+make up           # start Postgres (docker compose)
+make run          # applies migrations, then serves the API on :8080
 curl localhost:8080/healthz
 ```
+
+If host port 5432 is already in use, start Postgres on another port and point
+the app at it:
+
+```bash
+POSTGRES_HOST_PORT=5433 make up
+DATABASE_URL="postgres://listings:listings@localhost:5433/listings?sslmode=disable" make run
+```
+
+Migrations are embedded in the binary and applied automatically on startup.
+This keeps local dev and tests simple. In a multi-replica production deploy you
+would instead run migrations as a separate, one-off step to avoid replicas
+racing to migrate.
 
 ## Architecture
 

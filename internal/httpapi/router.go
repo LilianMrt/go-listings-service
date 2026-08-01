@@ -8,14 +8,16 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/LilianMrt/go-listings-service/internal/listing"
 	"github.com/LilianMrt/go-listings-service/internal/observability"
 )
 
-// Deps holds the collaborators the router needs. It grows as milestones land
-// (listing service, etc.); for M0 it carries observability only.
+// Deps holds the collaborators the router needs. It grows as milestones land;
+// Repo is wired now and consumed by the /v1/listings handlers in M2.
 type Deps struct {
 	Logger *slog.Logger
 	Health *observability.Health
+	Repo   listing.Repository
 }
 
 // NewRouter builds the application router with middleware and routes.

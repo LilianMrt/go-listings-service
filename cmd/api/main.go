@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,7 +12,9 @@ import (
 	"time"
 
 	"github.com/LilianMrt/go-listings-service/internal/config"
+	"github.com/LilianMrt/go-listings-service/internal/db"
 	"github.com/LilianMrt/go-listings-service/internal/httpapi"
+	"github.com/LilianMrt/go-listings-service/internal/listing/store"
 	"github.com/LilianMrt/go-listings-service/internal/observability"
 )
 
@@ -31,11 +34,31 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Apply schema migrations before opening the application pool.
+	logger.Info("applying database migrations")
+	if err := db.Migrate(cfg.DatabaseURL); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+
+	startupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	pool, err := db.NewPool(startupCtx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	repo := store.NewPostgres(pool)
+
 	health := observability.NewHealth()
 
 	router := httpapi.NewRouter(httpapi.Deps{
 		Logger: logger,
 		Health: health,
+		Repo:   repo,
 	})
 
 	srv := &http.Server{
@@ -44,12 +67,8 @@ func run(logger *slog.Logger) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	// M0 has no external dependencies to wait on, so we are ready immediately.
-	// Later milestones flip this only after DB/Kafka are reachable.
+	// Migrations ran and the pool pinged, so dependencies are reachable.
 	health.SetReady(true)
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	serverErr := make(chan error, 1)
 	go func() {

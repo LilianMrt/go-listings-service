@@ -23,12 +23,20 @@ vet: ## Run go vet
 	$(GO) vet ./...
 
 .PHONY: test
-test: ## Run all tests
+test: ## Run all tests (integration tests skip unless TEST_DATABASE_URL is set)
 	$(GO) test ./... -race -count=1
+
+.PHONY: up
+up: ## Start local Postgres via docker compose
+	docker compose up -d
+
+.PHONY: down
+down: ## Stop local Postgres (and drop its volume)
+	docker compose down -v
 
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf bin
 
-# Targets added as milestones land: `up`/`down` (docker compose, M1),
-# `lint` (golangci-lint, M5), `docker-build` (Dockerfile, M5).
+# Targets added as milestones land: `lint` (golangci-lint, M5),
+# `docker-build` (Dockerfile, M5).
