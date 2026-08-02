@@ -1,6 +1,6 @@
-// Package listing holds the domain model, the repository contract it depends
-// on, and (from M2) the business-logic service. The concrete Postgres
-// repository lives in the store subpackage.
+// Package listing holds the domain model, the contracts it depends on (the
+// repository and the event publisher), and the business-logic service. The
+// concrete Postgres repository lives in the store subpackage.
 package listing
 
 import (

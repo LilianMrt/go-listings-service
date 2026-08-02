@@ -26,7 +26,16 @@ cp .env.example .env
 make up           # start Postgres (docker compose)
 make run          # applies migrations, then serves the API on :8080
 curl localhost:8080/healthz
+open http://localhost:8080/docs   # interactive API documentation
 ```
+
+## API documentation
+
+OpenAPI 3.1 is generated from the code (via [Huma](https://huma.rocks/)), so it
+never drifts from the implementation:
+
+- Interactive docs (Stoplight Elements): `GET /docs`
+- OpenAPI spec: `GET /openapi.json` and `GET /openapi.yaml`
 
 If host port 5432 is already in use, start Postgres on another port and point
 the app at it:
@@ -49,7 +58,7 @@ internal/config            env configuration
 internal/listing           domain: model, validation, service (business logic)
 internal/listing/store     repository over pgx (interface + postgres impl)
 internal/events            kafka publisher (interface + kafka-go impl; noop for tests)
-internal/httpapi           handlers, router, middleware (logging, recovery, request id)
+internal/httpapi           Huma operations, router, middleware (logging, recovery, request id)
 internal/observability     healthz, readyz, metrics
 migrations/                *.up.sql / *.down.sql
 ```

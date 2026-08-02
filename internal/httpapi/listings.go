@@ -2,227 +2,182 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
 	"github.com/LilianMrt/go-listings-service/internal/listing"
 )
 
-// maxBodyBytes caps request bodies to keep the service from buffering huge
-// payloads.
-const maxBodyBytes = 1 << 20 // 1 MiB
-
-type listingHandler struct {
+type listingRoutes struct {
 	svc    *listing.Service
 	logger *slog.Logger
 }
 
-// routes returns the sub-router for /v1/listings.
-func (h *listingHandler) routes() http.Handler {
-	r := chi.NewRouter()
-	r.Post("/", h.create)
-	r.Get("/", h.list)
-	r.Get("/{id}", h.get)
-	r.Patch("/{id}", h.update)
-	r.Delete("/{id}", h.delete)
-	r.Post("/{id}/publish", h.publish)
-	r.Post("/{id}/sell", h.sell)
-	return r
+// registerListings wires the /v1/listings operations onto the Huma API. Each
+// registration contributes to the generated OpenAPI document.
+func registerListings(api huma.API, svc *listing.Service, logger *slog.Logger) {
+	h := &listingRoutes{svc: svc, logger: logger}
+	tag := []string{"Listings"}
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "create-listing",
+		Method:        http.MethodPost,
+		Path:          "/v1/listings",
+		Summary:       "Create a listing",
+		Description:   "Creates a new listing in draft status.",
+		Tags:          tag,
+		DefaultStatus: http.StatusCreated,
+	}, h.create)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-listings",
+		Method:      http.MethodGet,
+		Path:        "/v1/listings",
+		Summary:     "List listings",
+		Description: "Lists listings with pagination and optional filters.",
+		Tags:        tag,
+	}, h.list)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-listing",
+		Method:      http.MethodGet,
+		Path:        "/v1/listings/{id}",
+		Summary:     "Get a listing",
+		Tags:        tag,
+	}, h.get)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "update-listing",
+		Method:      http.MethodPatch,
+		Path:        "/v1/listings/{id}",
+		Summary:     "Update a listing",
+		Description: "Partially updates a listing. Only provided fields change.",
+		Tags:        tag,
+	}, h.update)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "publish-listing",
+		Method:      http.MethodPost,
+		Path:        "/v1/listings/{id}/publish",
+		Summary:     "Publish a listing",
+		Description: "Transitions a draft listing to published.",
+		Tags:        tag,
+	}, h.publish)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "sell-listing",
+		Method:      http.MethodPost,
+		Path:        "/v1/listings/{id}/sell",
+		Summary:     "Mark a listing as sold",
+		Description: "Transitions a published listing to sold.",
+		Tags:        tag,
+	}, h.sell)
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "delete-listing",
+		Method:        http.MethodDelete,
+		Path:          "/v1/listings/{id}",
+		Summary:       "Delete a listing",
+		Tags:          tag,
+		DefaultStatus: http.StatusNoContent,
+	}, h.delete)
 }
 
-func (h *listingHandler) create(w http.ResponseWriter, r *http.Request) {
-	var req createRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeBadRequest(w, err.Error())
-		return
-	}
-
-	sellerID, err := uuid.Parse(req.SellerID)
+func (h *listingRoutes) create(ctx context.Context, in *CreateListingInput) (*ListingOutput, error) {
+	sellerID, err := uuid.Parse(in.Body.SellerID)
 	if err != nil {
-		writeErrEnvelope(w, http.StatusUnprocessableEntity, "validation_failed",
-			"one or more fields are invalid", map[string]string{"seller_id": "must be a valid uuid"})
-		return
+		return nil, huma.Error422UnprocessableEntity("one or more fields are invalid",
+			&huma.ErrorDetail{Message: "must be a valid uuid", Location: "body.seller_id", Value: in.Body.SellerID})
 	}
 
-	l, err := h.svc.Create(r.Context(), listing.CreateInput{
-		Title:       req.Title,
-		Description: req.Description,
-		PriceCents:  req.PriceCents,
-		Currency:    req.Currency,
-		City:        req.City,
-		PostalCode:  req.PostalCode,
-		SurfaceM2:   req.SurfaceM2,
-		Rooms:       req.Rooms,
+	l, err := h.svc.Create(ctx, listing.CreateInput{
+		Title:       in.Body.Title,
+		Description: in.Body.Description,
+		PriceCents:  in.Body.PriceCents,
+		Currency:    in.Body.Currency,
+		City:        in.Body.City,
+		PostalCode:  in.Body.PostalCode,
+		SurfaceM2:   in.Body.SurfaceM2,
+		Rooms:       in.Body.Rooms,
 		SellerID:    sellerID,
 	})
 	if err != nil {
-		writeServiceError(w, h.logger, r, err)
-		return
+		return nil, toHumaError(ctx, h.logger, err)
 	}
-	writeJSON(w, http.StatusCreated, toResponse(l))
+	return &ListingOutput{Body: toResponse(l)}, nil
 }
 
-func (h *listingHandler) get(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
-	l, err := h.svc.Get(r.Context(), id)
+func (h *listingRoutes) get(ctx context.Context, in *ListingIDInput) (*ListingOutput, error) {
+	id, err := uuid.Parse(in.ID)
 	if err != nil {
-		writeServiceError(w, h.logger, r, err)
-		return
+		return nil, huma.Error422UnprocessableEntity("id must be a valid uuid")
 	}
-	writeJSON(w, http.StatusOK, toResponse(l))
+	l, err := h.svc.Get(ctx, id)
+	if err != nil {
+		return nil, toHumaError(ctx, h.logger, err)
+	}
+	return &ListingOutput{Body: toResponse(l)}, nil
 }
 
-func (h *listingHandler) list(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-
-	filter := listing.ListFilter{
-		Limit:  20,
-		Offset: 0,
-	}
-
-	if v := q.Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > 100 {
-			writeBadRequest(w, "limit must be an integer between 1 and 100")
-			return
-		}
-		filter.Limit = n
-	}
-	if v := q.Get("offset"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 {
-			writeBadRequest(w, "offset must be a non-negative integer")
-			return
-		}
-		filter.Offset = n
-	}
-	if v := q.Get("city"); v != "" {
-		filter.City = &v
-	}
-	if v := q.Get("status"); v != "" {
-		st := listing.Status(v)
-		if !st.Valid() {
-			writeBadRequest(w, "status must be one of draft, published, sold")
-			return
-		}
-		filter.Status = &st
-	}
-	if v := q.Get("min_price"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			writeBadRequest(w, "min_price must be a non-negative integer")
-			return
-		}
-		filter.MinPrice = &n
-	}
-	if v := q.Get("max_price"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			writeBadRequest(w, "max_price must be a non-negative integer")
-			return
-		}
-		filter.MaxPrice = &n
-	}
-
-	items, err := h.svc.List(r.Context(), filter)
+func (h *listingRoutes) list(ctx context.Context, in *ListListingsInput) (*ListListingsOutput, error) {
+	items, err := h.svc.List(ctx, in.toFilter())
 	if err != nil {
-		writeServiceError(w, h.logger, r, err)
-		return
+		return nil, toHumaError(ctx, h.logger, err)
 	}
 
-	resp := listResponse{
-		Items:  make([]listingResponse, 0, len(items)),
-		Limit:  filter.Limit,
-		Offset: filter.Offset,
-		Count:  len(items),
-	}
+	out := &ListListingsOutput{}
+	out.Body.Items = make([]listingResponse, 0, len(items))
 	for i := range items {
-		resp.Items = append(resp.Items, toResponse(&items[i]))
+		out.Body.Items = append(out.Body.Items, toResponse(&items[i]))
 	}
-	writeJSON(w, http.StatusOK, resp)
+	out.Body.Limit = in.Limit
+	out.Body.Offset = in.Offset
+	out.Body.Count = len(items)
+	return out, nil
 }
 
-func (h *listingHandler) update(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
-	var req updateRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeBadRequest(w, err.Error())
-		return
-	}
-	l, err := h.svc.Update(r.Context(), id, req.toInput())
+func (h *listingRoutes) update(ctx context.Context, in *UpdateListingInput) (*ListingOutput, error) {
+	id, err := uuid.Parse(in.ID)
 	if err != nil {
-		writeServiceError(w, h.logger, r, err)
-		return
+		return nil, huma.Error422UnprocessableEntity("id must be a valid uuid")
 	}
-	writeJSON(w, http.StatusOK, toResponse(l))
-}
-
-func (h *listingHandler) publish(w http.ResponseWriter, r *http.Request) {
-	h.doTransition(w, r, h.svc.Publish)
-}
-
-func (h *listingHandler) sell(w http.ResponseWriter, r *http.Request) {
-	h.doTransition(w, r, h.svc.Sell)
-}
-
-func (h *listingHandler) doTransition(w http.ResponseWriter, r *http.Request, fn func(ctx context.Context, id uuid.UUID) (*listing.Listing, error)) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
-	l, err := fn(r.Context(), id)
+	l, err := h.svc.Update(ctx, id, in.toServiceInput())
 	if err != nil {
-		writeServiceError(w, h.logger, r, err)
-		return
+		return nil, toHumaError(ctx, h.logger, err)
 	}
-	writeJSON(w, http.StatusOK, toResponse(l))
+	return &ListingOutput{Body: toResponse(l)}, nil
 }
 
-func (h *listingHandler) delete(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
-	if err := h.svc.Delete(r.Context(), id); err != nil {
-		writeServiceError(w, h.logger, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+func (h *listingRoutes) publish(ctx context.Context, in *ListingIDInput) (*ListingOutput, error) {
+	return h.transition(ctx, in.ID, h.svc.Publish)
 }
 
-// parseID reads and validates the {id} path parameter. It writes a 400 and
-// returns ok=false when the id is not a valid uuid.
-func parseID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+func (h *listingRoutes) sell(ctx context.Context, in *ListingIDInput) (*ListingOutput, error) {
+	return h.transition(ctx, in.ID, h.svc.Sell)
+}
+
+func (h *listingRoutes) transition(ctx context.Context, rawID string, fn func(context.Context, uuid.UUID) (*listing.Listing, error)) (*ListingOutput, error) {
+	id, err := uuid.Parse(rawID)
 	if err != nil {
-		writeBadRequest(w, "id must be a valid uuid")
-		return uuid.Nil, false
+		return nil, huma.Error422UnprocessableEntity("id must be a valid uuid")
 	}
-	return id, true
+	l, err := fn(ctx, id)
+	if err != nil {
+		return nil, toHumaError(ctx, h.logger, err)
+	}
+	return &ListingOutput{Body: toResponse(l)}, nil
 }
 
-// decodeJSON strictly decodes a single JSON object into dst, rejecting unknown
-// fields and trailing content, with a body-size cap.
-func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		return err
+func (h *listingRoutes) delete(ctx context.Context, in *ListingIDInput) (*EmptyOutput, error) {
+	id, err := uuid.Parse(in.ID)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("id must be a valid uuid")
 	}
-	if dec.More() {
-		return errors.New("request body must contain a single JSON object")
+	if err := h.svc.Delete(ctx, id); err != nil {
+		return nil, toHumaError(ctx, h.logger, err)
 	}
-	return nil
+	return &EmptyOutput{}, nil
 }
