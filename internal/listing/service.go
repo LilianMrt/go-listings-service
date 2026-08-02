@@ -2,6 +2,7 @@ package listing
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -9,16 +10,46 @@ import (
 )
 
 // Service holds the business logic for listings. It depends on the storage
-// contract (and, from M4, an event publisher) via interfaces so it is
-// unit-testable with fakes.
+// contract and an event publisher via interfaces so it is unit-testable with
+// fakes.
 type Service struct {
 	repo Repository
+	pub  Publisher
 	now  func() time.Time
 }
 
-// NewService builds a Service over the given repository.
-func NewService(repo Repository) *Service {
-	return &Service{repo: repo, now: func() time.Time { return time.Now().UTC() }}
+// Option configures a Service at construction time.
+type Option func(*Service)
+
+// WithPublisher sets the event publisher used to emit domain events after a
+// mutation is committed. Without it, events are discarded.
+func WithPublisher(p Publisher) Option {
+	return func(s *Service) { s.pub = p }
+}
+
+// NewService builds a Service over the given repository. By default events are
+// discarded; pass WithPublisher to emit them.
+func NewService(repo Repository, opts ...Option) *Service {
+	s := &Service{
+		repo: repo,
+		pub:  nopPublisher{},
+		now:  func() time.Time { return time.Now().UTC() },
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// emit publishes a domain event best-effort. The database is already
+// committed, so a publish failure is logged but never fails the operation.
+func (s *Service) emit(ctx context.Context, typ EventType, l *Listing) {
+	if err := s.pub.Publish(ctx, typ, l); err != nil {
+		slog.WarnContext(ctx, "publish listing event failed",
+			slog.String("event", string(typ)),
+			slog.String("listing_id", l.ID.String()),
+			slog.Any("error", err))
+	}
 }
 
 // CreateInput is the validated input for creating a listing.
@@ -63,6 +94,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Listing, error) 
 	if err := s.repo.Create(ctx, l); err != nil {
 		return nil, err
 	}
+	s.emit(ctx, EventCreated, l)
 	return l, nil
 }
 
@@ -129,6 +161,7 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*Li
 	if err := s.repo.Update(ctx, l); err != nil {
 		return nil, err
 	}
+	s.emit(ctx, EventUpdated, l)
 	return l, nil
 }
 
@@ -155,10 +188,20 @@ func (s *Service) transition(ctx context.Context, id uuid.UUID, to Status) (*Lis
 	if err := s.repo.Update(ctx, l); err != nil {
 		return nil, err
 	}
+	s.emit(ctx, EventUpdated, l)
 	return l, nil
 }
 
-// Delete removes a listing, or returns ErrNotFound.
+// Delete removes a listing, or returns ErrNotFound. It loads the listing first
+// so the emitted event carries the deleted entity's data.
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
-	return s.repo.Delete(ctx, id)
+	l, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.repo.Delete(ctx, id); err != nil {
+		return err
+	}
+	s.emit(ctx, EventDeleted, l)
+	return nil
 }

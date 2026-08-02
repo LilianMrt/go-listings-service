@@ -31,11 +31,11 @@ test-unit: ## Run unit tests only (short mode, no Docker required)
 	$(GO) test ./... -short -race -count=1
 
 .PHONY: up
-up: ## Start local Postgres via docker compose
+up: ## Start local Postgres + Kafka via docker compose
 	docker compose up -d
 
 .PHONY: down
-down: ## Stop local Postgres (and drop its volume)
+down: ## Stop local Postgres + Kafka (and drop volumes)
 	docker compose down -v
 
 .PHONY: clean

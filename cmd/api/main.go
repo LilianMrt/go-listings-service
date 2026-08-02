@@ -13,6 +13,7 @@ import (
 
 	"github.com/LilianMrt/go-listings-service/internal/config"
 	"github.com/LilianMrt/go-listings-service/internal/db"
+	"github.com/LilianMrt/go-listings-service/internal/events"
 	"github.com/LilianMrt/go-listings-service/internal/httpapi"
 	"github.com/LilianMrt/go-listings-service/internal/listing"
 	"github.com/LilianMrt/go-listings-service/internal/listing/store"
@@ -52,8 +53,26 @@ func run(logger *slog.Logger) error {
 	}
 	defer pool.Close()
 
+	// Choose the event publisher: Kafka when enabled, otherwise a noop that
+	// discards events so the service still runs without a broker.
+	var publisher listing.Publisher = events.Noop{}
+	if cfg.KafkaEnabled {
+		kw := events.NewWriter(cfg.KafkaBrokers, cfg.KafkaTopic)
+		defer func() {
+			if err := kw.Close(); err != nil {
+				logger.Warn("closing kafka writer", slog.Any("error", err))
+			}
+		}()
+		publisher = kw
+		logger.Info("kafka publisher enabled",
+			slog.String("topic", cfg.KafkaTopic),
+			slog.Any("brokers", cfg.KafkaBrokers))
+	} else {
+		logger.Info("kafka disabled, listing events will be discarded")
+	}
+
 	repo := store.NewPostgres(pool)
-	svc := listing.NewService(repo)
+	svc := listing.NewService(repo, listing.WithPublisher(publisher))
 
 	health := observability.NewHealth()
 

@@ -15,7 +15,7 @@ Work in progress. Milestones:
 - [x] M1 DB + model: Postgres, migrations, pgxpool, repository.
 - [x] M2 REST CRUD: service layer, handlers, validation, pagination/filters.
 - [x] M3 Tests: unit (fakes) + integration (testcontainers).
-- [ ] M4 Kafka events: publish domain events on mutations.
+- [x] M4 Kafka events: publish domain events on mutations.
 - [ ] M5 Container + CI: multi-stage Dockerfile, GitHub Actions.
 - [ ] M6 Polish: docs, metrics, structured logging.
 
@@ -23,7 +23,7 @@ Work in progress. Milestones:
 
 ```bash
 cp .env.example .env
-make up           # start Postgres (docker compose)
+make up           # start Postgres + Kafka (docker compose)
 make run          # applies migrations, then serves the API on :8080
 curl localhost:8080/healthz
 open http://localhost:8080/docs   # interactive API documentation
@@ -121,3 +121,37 @@ curl -X POST localhost:8080/v1/listings -H 'Content-Type: application/json' -d '
   "seller_id": "35d22b88-77de-4c04-bbff-523e309ff93a"
 }'
 ```
+
+## Events
+
+Every mutation publishes a domain event to the Kafka topic `listings.events`,
+keyed by the listing id so all events for one listing stay ordered on the same
+partition. Event types: `listing.created`, `listing.updated` (updates and
+status transitions), `listing.deleted`.
+
+```json
+{
+  "type": "listing.created",
+  "id": "b6310b10-9636-4d5a-a977-6f85e558cf04",
+  "occurred_at": "2026-08-02T14:04:38Z",
+  "data": { "id": "...", "title": "...", "price_cents": 250000, "status": "draft", "...": "..." }
+}
+```
+
+Design choices, and their tradeoffs:
+
+- **Emitted after the DB commit, best-effort.** The event schema is a contract,
+  so it lives in `internal/events` decoupled from the HTTP DTO. Publishing
+  happens only once the write is durable.
+- **At-least-once, no transactional outbox (v1).** If the process dies between
+  the commit and the publish, an event can be missed; if a retry succeeds after
+  a timeout, it can be duplicated. Consumers should be idempotent. A production
+  system needing exactly-once-ish delivery would add an outbox table drained by
+  a relay. Kept out of scope here deliberately.
+- **A publish failure never fails the request** (the data is already saved); it
+  is logged instead.
+- The topic is auto-created on first write for local/dev convenience (with a
+  short produce retry so the first event is not lost to the creation race); in
+  production it would be provisioned ahead of time.
+
+Set `KAFKA_ENABLED=false` to run without a broker (events are discarded).

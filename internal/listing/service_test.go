@@ -12,7 +12,7 @@ import (
 
 // fakeRepo is an in-memory Repository for unit-testing the service.
 type fakeRepo struct {
-	items    map[uuid.UUID]listing.Listing
+	items     map[uuid.UUID]listing.Listing
 	createErr error
 }
 
@@ -57,6 +57,20 @@ func (f *fakeRepo) Delete(_ context.Context, id uuid.UUID) error {
 		return listing.ErrNotFound
 	}
 	delete(f.items, id)
+	return nil
+}
+
+// fakePublisher records the events emitted by the service.
+type fakePublisher struct {
+	events []listing.EventType
+	err    error
+}
+
+func (f *fakePublisher) Publish(_ context.Context, typ listing.EventType, _ *listing.Listing) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.events = append(f.events, typ)
 	return nil
 }
 
@@ -171,6 +185,52 @@ func TestUpdate_PartialAndValidation(t *testing.T) {
 	var ve *listing.ValidationError
 	if !errors.As(err, &ve) {
 		t.Fatalf("want ValidationError, got %v", err)
+	}
+}
+
+func TestService_EmitsEvents(t *testing.T) {
+	ctx := context.Background()
+	pub := &fakePublisher{}
+	svc := listing.NewService(newFakeRepo(), listing.WithPublisher(pub))
+
+	l, err := svc.Create(ctx, validCreateInput())
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	newTitle := "Renamed"
+	if _, err := svc.Update(ctx, l.ID, listing.UpdateInput{Title: &newTitle}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if _, err := svc.Publish(ctx, l.ID); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if err := svc.Delete(ctx, l.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	want := []listing.EventType{
+		listing.EventCreated,
+		listing.EventUpdated, // Update
+		listing.EventUpdated, // Publish transition
+		listing.EventDeleted,
+	}
+	if len(pub.events) != len(want) {
+		t.Fatalf("emitted %v, want %v", pub.events, want)
+	}
+	for i, ev := range want {
+		if pub.events[i] != ev {
+			t.Errorf("event[%d] = %q, want %q", i, pub.events[i], ev)
+		}
+	}
+}
+
+func TestService_PublishErrorDoesNotFailMutation(t *testing.T) {
+	ctx := context.Background()
+	pub := &fakePublisher{err: errors.New("broker down")}
+	svc := listing.NewService(newFakeRepo(), listing.WithPublisher(pub))
+
+	if _, err := svc.Create(ctx, validCreateInput()); err != nil {
+		t.Fatalf("create should succeed despite publish failure, got %v", err)
 	}
 }
 
