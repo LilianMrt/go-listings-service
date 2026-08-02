@@ -42,7 +42,10 @@ func Migrate(databaseURL string) error {
 	if err != nil {
 		return fmt.Errorf("init migrator: %w", err)
 	}
-	defer m.Close()
+	// Close releases the migrator's source and database handles; a failure
+	// there does not affect migrations that already applied, so it is not
+	// surfaced as a startup error.
+	defer func() { _, _ = m.Close() }()
 
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		return fmt.Errorf("apply migrations: %w", err)

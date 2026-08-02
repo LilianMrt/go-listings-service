@@ -1,5 +1,8 @@
 # go-listings-service
 
+[![CI](https://github.com/LilianMrt/go-listings-service/actions/workflows/ci.yml/badge.svg)](https://github.com/LilianMrt/go-listings-service/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white)
+
 A small, production-shaped REST microservice in Go for managing property
 listings. Backed by PostgreSQL with clean, testable layering, and publishing
 domain events to Kafka on every listing change.
@@ -7,19 +10,21 @@ domain events to Kafka on every listing change.
 Built as a focused demonstration of Go backend engineering: clean architecture,
 unit and integration tests, Docker, CI, and light self-built observability.
 
-## Status
+## What's built
 
-Work in progress. Milestones:
+Delivered in focused, independently reviewable milestones:
 
-- [x] M0 Skeleton: module, layout, chi router, `/healthz`, graceful shutdown.
-- [x] M1 DB + model: Postgres, migrations, pgxpool, repository.
-- [x] M2 REST CRUD: service layer, handlers, validation, pagination/filters.
-- [x] M3 Tests: unit (fakes) + integration (testcontainers).
-- [x] M4 Kafka events: publish domain events on mutations.
-- [ ] M5 Container + CI: multi-stage Dockerfile, GitHub Actions.
-- [ ] M6 Polish: docs, metrics, structured logging.
+- [x] Skeleton: module, layout, chi router, `/healthz`, graceful shutdown.
+- [x] DB + model: Postgres, embedded migrations, pgxpool, repository.
+- [x] REST CRUD: service layer, handlers, validation, pagination/filters.
+- [x] Tests: unit (fakes) + integration (testcontainers).
+- [x] Kafka events: publish domain events on every mutation.
+- [x] Container + CI: multi-stage Dockerfile, GitHub Actions.
+- [x] Polish: generated OpenAPI docs, structured logging, documented tradeoffs.
 
 ## Quick start
+
+Run the API on the host, against containerized infrastructure:
 
 ```bash
 cp .env.example .env
@@ -28,6 +33,41 @@ make run          # applies migrations, then serves the API on :8080
 curl localhost:8080/healthz
 open http://localhost:8080/docs   # interactive API documentation
 ```
+
+Or run the whole stack (app + Postgres + Kafka) in containers with one command:
+
+```bash
+make up-app       # builds the image and starts everything
+curl localhost:8080/healthz
+make down         # stop everything and drop volumes
+```
+
+## Docker
+
+The service ships as a multi-stage build: a Go build stage produces a static,
+stripped binary (`CGO_ENABLED=0`), and the final image is
+`distroless/static` (no shell, no package manager, runs as a non-root user).
+The result is a ~16 MB image with the migrations embedded, so it needs only a
+database URL and Kafka brokers to run.
+
+```bash
+make docker-build          # -> go-listings-service:latest
+docker run --rm -p 8080:8080 \
+  -e DATABASE_URL="postgres://user:pass@host:5432/listings?sslmode=disable" \
+  -e KAFKA_BROKERS="host:9092" \
+  go-listings-service
+```
+
+## Continuous integration
+
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on
+every push and pull request:
+
+- **build, vet, lint, unit tests**: `go build`, `go vet`, `golangci-lint`, and
+  the fast `-short` unit tests.
+- **integration tests**: the full `go test` suite, including the testcontainers
+  Postgres and Kafka tests (the runner provides Docker).
+- **docker**: builds the production image to catch Dockerfile regressions.
 
 ## API documentation
 
@@ -72,7 +112,7 @@ internal/listing           domain: model, validation, service (business logic)
 internal/listing/store     repository over pgx (interface + postgres impl)
 internal/events            kafka publisher (interface + kafka-go impl; noop for tests)
 internal/httpapi           Huma operations, router, middleware (logging, recovery, request id)
-internal/observability     healthz, readyz, metrics
+internal/observability     healthz, readyz
 migrations/                *.up.sql / *.down.sql
 ```
 
@@ -86,9 +126,7 @@ keeps business logic unit-testable with fakes.
 | Endpoint   | Purpose                          |
 |------------|----------------------------------|
 | `/healthz` | Liveness probe                   |
-| `/readyz`  | Readiness probe (deps reachable) |
-
-Prometheus `/metrics` arrives in M6.
+| `/readyz`  | Readiness probe (database reachable) |
 
 ### Listings API (`/v1/listings`)
 
@@ -105,14 +143,7 @@ Prometheus `/metrics` arrives in M6.
 List query params: `limit` (1-100, default 20), `offset` (>=0), `city`,
 `status` (`draft`/`published`/`sold`), `min_price`, `max_price` (cents).
 
-Errors use a consistent envelope:
-
-```json
-{ "error": { "code": "validation_failed", "message": "one or more fields are invalid",
-             "fields": { "title": "is required" } } }
-```
-
-Example:
+Create a listing:
 
 ```bash
 curl -X POST localhost:8080/v1/listings -H 'Content-Type: application/json' -d '{
@@ -121,6 +152,24 @@ curl -X POST localhost:8080/v1/listings -H 'Content-Type: application/json' -d '
   "seller_id": "35d22b88-77de-4c04-bbff-523e309ff93a"
 }'
 ```
+
+Errors follow [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) problem+json
+(Huma's default), so validation failures list every offending field at once:
+
+```json
+{
+  "title": "Unprocessable Entity",
+  "status": 422,
+  "detail": "validation failed",
+  "errors": [
+    { "message": "expected length >= 1", "location": "body.title", "value": "" },
+    { "message": "expected number >= 1", "location": "body.price_cents", "value": 0 }
+  ]
+}
+```
+
+An illegal status transition returns `409` with a `detail` such as
+`cannot transition from "draft" to "sold"`.
 
 ## Events
 

@@ -19,6 +19,7 @@ services:
   kafka:
     image: apache/kafka:3.8.0
     ports:
+      # EXTERNAL listener, for clients on the host (make run, tests).
       # Override the host port with KAFKA_HOST_PORT if 9092 is taken locally.
       - "${KAFKA_HOST_PORT:-9092}:9092"
     environment:
@@ -26,16 +27,37 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # Two client listeners: INTERNAL for in-compose services (advertised as
+      # kafka:29092), EXTERNAL for host clients (advertised as localhost:9092).
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  # The application itself. In the "app" profile so `make up` starts only the
+  # infrastructure (for host dev and tests); `make up-app` runs the full stack.
+  api:
+    build: .
+    profiles: ["app"]
+    ports:
+      - "${HTTP_HOST_PORT:-8080}:8080"
+    environment:
+      HTTP_ADDR: ":8080"
+      DATABASE_URL: "postgres://listings:listings@postgres:5432/listings?sslmode=disable"
+      KAFKA_ENABLED: "true"
+      KAFKA_BROKERS: "kafka:29092"
+      KAFKA_TOPIC: "listings.events"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
 
 volumes:
   pgdata:

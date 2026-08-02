@@ -190,7 +190,7 @@ func (c *apiClient) raw(method, path string, payload any) (int, []byte) {
 	if err != nil {
 		c.t.Fatalf("do %s %s: %v", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		c.t.Fatalf("read body: %v", err)
