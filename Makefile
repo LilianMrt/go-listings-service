@@ -23,8 +23,12 @@ vet: ## Run go vet
 	$(GO) vet ./...
 
 .PHONY: test
-test: ## Run all tests (integration tests skip unless TEST_DATABASE_URL is set)
+test: ## Run all tests, including testcontainers integration (needs Docker)
 	$(GO) test ./... -race -count=1
+
+.PHONY: test-unit
+test-unit: ## Run unit tests only (short mode, no Docker required)
+	$(GO) test ./... -short -race -count=1
 
 .PHONY: up
 up: ## Start local Postgres via docker compose

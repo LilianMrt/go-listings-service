@@ -14,7 +14,7 @@ Work in progress. Milestones:
 - [x] M0 Skeleton: module, layout, chi router, `/healthz`, graceful shutdown.
 - [x] M1 DB + model: Postgres, migrations, pgxpool, repository.
 - [x] M2 REST CRUD: service layer, handlers, validation, pagination/filters.
-- [ ] M3 Tests: unit (fakes) + integration (testcontainers).
+- [x] M3 Tests: unit (fakes) + integration (testcontainers).
 - [ ] M4 Kafka events: publish domain events on mutations.
 - [ ] M5 Container + CI: multi-stage Dockerfile, GitHub Actions.
 - [ ] M6 Polish: docs, metrics, structured logging.
@@ -49,6 +49,19 @@ Migrations are embedded in the binary and applied automatically on startup.
 This keeps local dev and tests simple. In a multi-replica production deploy you
 would instead run migrations as a separate, one-off step to avoid replicas
 racing to migrate.
+
+## Testing
+
+```bash
+make test-unit   # fast unit tests, no Docker (service logic with fakes)
+make test        # everything, incl. integration tests via testcontainers (needs Docker)
+```
+
+Unit tests cover the service layer with a fake repository (validation, status
+transitions, partial updates). Integration tests spin a throwaway Postgres with
+[testcontainers-go](https://golang.testcontainers.org/): the repository CRUD and
+the full HTTP lifecycle (Huma -> service -> Postgres) run unattended, no manually
+started database.
 
 ## Architecture
 

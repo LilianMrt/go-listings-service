@@ -3,7 +3,6 @@ package store_test
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -12,23 +11,20 @@ import (
 	"github.com/LilianMrt/go-listings-service/internal/db"
 	"github.com/LilianMrt/go-listings-service/internal/listing"
 	"github.com/LilianMrt/go-listings-service/internal/listing/store"
+	"github.com/LilianMrt/go-listings-service/internal/testsupport"
 )
 
-// TestPostgresCRUD exercises the repository against a real Postgres. It is
-// skipped unless TEST_DATABASE_URL is set. M3 will drive this via
-// testcontainers so it runs unattended.
+// TestPostgresCRUD exercises the repository against a real Postgres started via
+// testcontainers. Skipped in -short mode (no Docker required there).
 func TestPostgresCRUD(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("set TEST_DATABASE_URL to run the store integration test")
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
 	}
 
-	if err := db.Migrate(url); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	dsn := testsupport.StartPostgres(t)
 
 	ctx := context.Background()
-	pool, err := db.NewPool(ctx, url)
+	pool, err := db.NewPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("pool: %v", err)
 	}
