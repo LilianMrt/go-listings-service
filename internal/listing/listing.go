@@ -29,6 +29,23 @@ func (s Status) Valid() bool {
 	}
 }
 
+// CanTransitionTo reports whether a listing may move from s to the target
+// status. Transitions are draft -> published -> sold, and any status to itself
+// (idempotent). Everything else is rejected.
+func (s Status) CanTransitionTo(to Status) bool {
+	if s == to {
+		return true
+	}
+	switch s {
+	case StatusDraft:
+		return to == StatusPublished
+	case StatusPublished:
+		return to == StatusSold
+	default:
+		return false
+	}
+}
+
 // Listing is a property listing.
 type Listing struct {
 	ID          uuid.UUID

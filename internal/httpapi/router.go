@@ -12,12 +12,11 @@ import (
 	"github.com/LilianMrt/go-listings-service/internal/observability"
 )
 
-// Deps holds the collaborators the router needs. It grows as milestones land;
-// Repo is wired now and consumed by the /v1/listings handlers in M2.
+// Deps holds the collaborators the router needs.
 type Deps struct {
-	Logger *slog.Logger
-	Health *observability.Health
-	Repo   listing.Repository
+	Logger   *slog.Logger
+	Health   *observability.Health
+	Listings *listing.Service
 }
 
 // NewRouter builds the application router with middleware and routes.
@@ -33,6 +32,10 @@ func NewRouter(deps Deps) http.Handler {
 	// heavy dependency before the service does anything worth measuring.
 	r.Get("/healthz", deps.Health.Livez)
 	r.Get("/readyz", deps.Health.Readyz)
+
+	// Versioned API.
+	lh := &listingHandler{svc: deps.Listings, logger: deps.Logger}
+	r.Mount("/v1/listings", lh.routes())
 
 	return r
 }

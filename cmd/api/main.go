@@ -14,6 +14,7 @@ import (
 	"github.com/LilianMrt/go-listings-service/internal/config"
 	"github.com/LilianMrt/go-listings-service/internal/db"
 	"github.com/LilianMrt/go-listings-service/internal/httpapi"
+	"github.com/LilianMrt/go-listings-service/internal/listing"
 	"github.com/LilianMrt/go-listings-service/internal/listing/store"
 	"github.com/LilianMrt/go-listings-service/internal/observability"
 )
@@ -52,13 +53,14 @@ func run(logger *slog.Logger) error {
 	defer pool.Close()
 
 	repo := store.NewPostgres(pool)
+	svc := listing.NewService(repo)
 
 	health := observability.NewHealth()
 
 	router := httpapi.NewRouter(httpapi.Deps{
-		Logger: logger,
-		Health: health,
-		Repo:   repo,
+		Logger:   logger,
+		Health:   health,
+		Listings: svc,
 	})
 
 	srv := &http.Server{

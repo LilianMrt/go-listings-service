@@ -13,7 +13,7 @@ Work in progress. Milestones:
 
 - [x] M0 Skeleton: module, layout, chi router, `/healthz`, graceful shutdown.
 - [x] M1 DB + model: Postgres, migrations, pgxpool, repository.
-- [ ] M2 REST CRUD: service layer, handlers, validation, pagination/filters.
+- [x] M2 REST CRUD: service layer, handlers, validation, pagination/filters.
 - [ ] M3 Tests: unit (fakes) + integration (testcontainers).
 - [ ] M4 Kafka events: publish domain events on mutations.
 - [ ] M5 Container + CI: multi-stage Dockerfile, GitHub Actions.
@@ -59,9 +59,43 @@ keeps business logic unit-testable with fakes.
 
 ## Endpoints
 
+### Operational
+
 | Endpoint   | Purpose                          |
 |------------|----------------------------------|
 | `/healthz` | Liveness probe                   |
 | `/readyz`  | Readiness probe (deps reachable) |
 
-The versioned `/v1/listings` API arrives in M2; Prometheus `/metrics` in M6.
+Prometheus `/metrics` arrives in M6.
+
+### Listings API (`/v1/listings`)
+
+| Method & path                    | Purpose                                             |
+|----------------------------------|-----------------------------------------------------|
+| `POST /v1/listings`              | Create a listing (starts as `draft`) -> 201         |
+| `GET /v1/listings/{id}`          | Fetch one -> 200 / 404                               |
+| `GET /v1/listings`               | List with pagination + filters -> 200               |
+| `PATCH /v1/listings/{id}`        | Partial update -> 200                                |
+| `POST /v1/listings/{id}/publish` | Transition `draft` -> `published` -> 200 / 409       |
+| `POST /v1/listings/{id}/sell`    | Transition `published` -> `sold` -> 200 / 409        |
+| `DELETE /v1/listings/{id}`       | Delete -> 204 / 404                                  |
+
+List query params: `limit` (1-100, default 20), `offset` (>=0), `city`,
+`status` (`draft`/`published`/`sold`), `min_price`, `max_price` (cents).
+
+Errors use a consistent envelope:
+
+```json
+{ "error": { "code": "validation_failed", "message": "one or more fields are invalid",
+             "fields": { "title": "is required" } } }
+```
+
+Example:
+
+```bash
+curl -X POST localhost:8080/v1/listings -H 'Content-Type: application/json' -d '{
+  "title": "Sunny 2-room", "price_cents": 250000, "city": "Toulouse",
+  "postal_code": "31000", "surface_m2": 45, "rooms": 2,
+  "seller_id": "35d22b88-77de-4c04-bbff-523e309ff93a"
+}'
+```
