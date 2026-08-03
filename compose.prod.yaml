@@ -1,0 +1,70 @@
+# Production compose for the VPS.
+#
+# The app image is pulled from GHCR (built and pushed by CI), so nothing is
+# built here. Postgres runs with a named volume for persistence; Kafka runs
+# alongside on an internal-only listener. The app is bound to 127.0.0.1:8080
+# so only nginx on the host can reach it (public HTTPS is terminated by nginx).
+#
+# Env comes from a .env file the deploy job writes from GitHub secrets:
+#   POSTGRES_PASSWORD=...        (the DB password)
+#   IMAGE=ghcr.io/lilianmrt/go-listings-service:latest   (or a pinned sha)
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: listings
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: listings
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U listings -d listings"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  kafka:
+    image: apache/kafka:3.8.0
+    restart: unless-stopped
+    # No named volume: events are best-effort (at-least-once, no outbox), so
+    # broker state is disposable here. Topics auto-create on first produce.
+    environment:
+      # Single-node KRaft (no ZooKeeper): this broker is also the controller.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      # Only an INTERNAL listener: the app is on the same compose network, and
+      # nothing on the host needs Kafka in prod (unlike the dev compose, which
+      # also exposes an EXTERNAL listener for `make run` and tests).
+      KAFKA_LISTENERS: INTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  api:
+    image: ${IMAGE:-ghcr.io/lilianmrt/go-listings-service:latest}
+    restart: unless-stopped
+    ports:
+      # Loopback only: nginx on the host proxies public HTTPS to this.
+      - "127.0.0.1:8080:8080"
+    environment:
+      HTTP_ADDR: ":8080"
+      DATABASE_URL: "postgres://listings:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/listings?sslmode=disable"
+      KAFKA_ENABLED: "true"
+      KAFKA_BROKERS: "kafka:29092"
+      KAFKA_TOPIC: "listings.events"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+
+volumes:
+  pgdata:

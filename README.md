@@ -1,7 +1,10 @@
 # go-listings-service
 
-[![CI](https://github.com/LilianMrt/go-listings-service/actions/workflows/ci.yml/badge.svg)](https://github.com/LilianMrt/go-listings-service/actions/workflows/ci.yml)
+[![Deploy](https://github.com/LilianMrt/go-listings-service/actions/workflows/deploy.yaml/badge.svg)](https://github.com/LilianMrt/go-listings-service/actions/workflows/deploy.yaml)
 ![Go](https://img.shields.io/badge/go-1.25-00ADD8?logo=go&logoColor=white)
+[![Live demo](https://img.shields.io/badge/live%20demo-docs-brightgreen)](https://go-listings-service.lilianmrt.duckdns.org/docs)
+
+**Live API docs:** https://go-listings-service.lilianmrt.duckdns.org/docs
 
 A small, production-shaped REST microservice in Go for managing property
 listings. Backed by PostgreSQL with clean, testable layering, and publishing
@@ -58,24 +61,33 @@ docker run --rm -p 8080:8080 \
   go-listings-service
 ```
 
-## Continuous integration
+## CI / CD
 
-GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on
-every push and pull request:
+Pushing to `main` runs [`.github/workflows/deploy.yaml`](.github/workflows/deploy.yaml),
+a single linear pipeline where each stage gates the next, so the image is only
+built and the VPS is only touched if the tests pass:
 
-- **build, vet, lint, unit tests**: `go build`, `go vet`, `golangci-lint`, and
-  the fast `-short` unit tests.
-- **integration tests**: the full `go test` suite, including the testcontainers
-  Postgres and Kafka tests (the runner provides Docker).
-- **docker**: builds the production image to catch Dockerfile regressions.
+1. **test**: `go build`, `go vet`, `golangci-lint`, and the full `go test -race`
+   suite, including the testcontainers Postgres and Kafka integration tests (the
+   runner provides Docker).
+2. **build & push**: builds the multi-stage image and pushes it to the GitHub
+   Container Registry (`ghcr.io/lilianmrt/go-listings-service`), tagged `latest`
+   and the commit SHA.
+3. **deploy**: SSHes to the VPS, syncs [`compose.prod.yaml`](compose.prod.yaml),
+   and runs `docker compose pull && up -d --wait`. Migrations apply on startup,
+   so there is no separate migration step.
+
+On the VPS the app binds to `127.0.0.1:8080`; nginx terminates TLS (via certbot)
+and reverse-proxies public HTTPS to it. Postgres runs alongside with a named
+volume; Kafka runs on an internal-only listener.
 
 ## API documentation
 
 OpenAPI 3.1 is generated from the code (via [Huma](https://huma.rocks/)), so it
-never drifts from the implementation:
+never drifts from the implementation. It's live on the deployed instance:
 
-- Interactive docs (Stoplight Elements): `GET /docs`
-- OpenAPI spec: `GET /openapi.json` and `GET /openapi.yaml`
+- Interactive docs (Stoplight Elements): [`/docs`](https://go-listings-service.lilianmrt.duckdns.org/docs)
+- OpenAPI spec: [`/openapi.json`](https://go-listings-service.lilianmrt.duckdns.org/openapi.json) and `/openapi.yaml`
 
 If host port 5432 is already in use, start Postgres on another port and point
 the app at it:

@@ -7,4 +7,5 @@ bin/
 .env.local
 .dockerignore
 Dockerfile
-docker-compose.yml
+docker-compose.yaml
+compose.prod.yaml
